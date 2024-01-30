@@ -1,0 +1,203 @@
+# Analyzing Weather Events Impacts on Public Health and Economy
+## Synopsis
+
+This analysis aims to analyze the effect of weather events on public health and the economy of the United States. Data is provided by the National Oceanic and Atmospheric Administration (NOAA) storm database. The analysis first cleans and groups listed NOAA "event types", into event groups, then charts total fatalities, injuries, and the value of property and crop damage caused by the groups.
+
+## Loading R Packages
+
+```{r}
+library(R.utils)
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(grid)
+library(gridExtra)
+```
+## Data Processing
+
+Check to see if data file already exists in working directory. Then use `data.table::fread()` for fast reading of data file to `data` dataframe.
+```{r, cache = TRUE}
+if (!file.exists('stormdata.csv.bz2')) {
+        download.file('https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2', 'stormdata.csv.bz2')
+}
+
+rawdata <- fread('stormdata.csv.bz2')
+```
+
+Check structure of `data`.
+```{r}
+str(rawdata)
+```
+
+For purposes of this project, `EVTYPE`, `FATALITIES`, `INJURIES`, `PROPDMG`, `PROPDMGEXP`, `CROPDMG`, and `CROPDMGEXP` columns are extracted to new dataframe `data` using `dplyr::select()`
+```{r}
+data <- select(rawdata, EVTYPE, FATALITIES, INJURIES, PROPDMG, PROPDMGEXP, CROPDMG, CROPDMGEXP)
+```
+
+Check for any `NA` values by summing incomplete cases in `data`.
+```{r}
+incompletecases <- sum(!complete.cases(data))
+```
+
+Thus there are `r incompletecases` incomplete cases; ie, no need to remove or impute `NA`s.
+
+### Cleaning Event Types
+  
+  Take a table of how many observations of each `EVTYPE` there are in decreasing order.
+``` {r}
+# since the table is long, the markdown will just print the 30 highest occurring `EVTYPE`s
+head(sort(table(data$EVTYPE), decreasing = TRUE), 30)
+```
+
+Group events into **HAIL, WIND, TORNADO, FLOOD, SNOW, RAIN, STORM, FIRE, HURRICANE, COLD, HEAT, OTHER**. Note:  
+
+* Funnel Clouds are categorized under the WIND group
+* Blizzards are categorized under the SNOW group
+* Lightning related events are categorized under the STORM group
+* Ice related events are categorized under the COLD group
+* Dry and drought related events are categorized under the HEAT group
+
+
+```{r, cache = TRUE}
+# add new column for groups, default to OTHER first
+
+data <- mutate(data, group = 'OTHER')
+
+data$group[grep('HAIL', data$EVTYPE, ignore.case = TRUE)] <- 'HAIL'
+data$group[grep('WIND|FUNNEL', data$EVTYPE, ignore.case = TRUE)] <- 'WIND'
+data$group[grep('TORNADO|WATERSPOUT', data$EVTYPE, ignore.case = TRUE)] <- 'TORNADO'
+data$group[grep('FLOOD|FLD', data$EVTYPE, ignore.case = TRUE)] <- 'FLOOD'
+data$group[grep('SNOW', data$EVTYPE, ignore.case = TRUE)] <- 'SNOW'
+data$group[grep('RAIN', data$EVTYPE, ignore.case = TRUE)] <- 'RAIN'
+data$group[grep('STORM|LIGHTNING|SURGE', data$EVTYPE, ignore.case = TRUE)] <- 'STORM'
+data$group[grep('FIRE', data$EVTYPE, ignore.case = TRUE)] <- 'FIRE'
+data$group[grep('HURRICANE|TYPHOON', data$EVTYPE, ignore.case = TRUE)] <- 'HURRICANE'
+data$group[grep('COLD|ICE|FROST|ICY|FREEZ', data$EVTYPE, ignore.case = TRUE)] <- 'COLD'
+data$group[grep('HEAT|HOT|WARM|DRY|DROUGHT', data$EVTYPE, ignore.case = TRUE)] <- 'HEAT'
+```
+
+Take a table of observations in each group.
+```{r}
+table(data$group)
+```
+
+### Cleaning Damage Columns
+
+The data has `PROPDMGEXP` and `CROPDMGEXP`, which provide the exponent values of `PROPDMG` and `CROPDMG`.
+```{r}
+unique(data$PROPDMGEXP)
+unique(data$CROPDMGEXP)
+```
+Letters correspond to the metric prefixes, with the assumptions of 
+
+* "B" represents billions.
+* "m" is treated the same as "M"
+* "K" is treated the same as "k"
+* "H" is treated the same as "h"
+* Empty values, "+", "?", and "-" are treated as "0"
+
+`PROPDMGUSD` and `CROPDMGUSD` will be `PROPDMG` and `CROPDMG` reformatted to be in dollars.
+```{r}
+tidydata <- data %>%
+        mutate(PROPDMGUSD = case_when(
+                PROPDMGEXP == "K" ~ PROPDMG * 1e3,
+                PROPDMGEXP == "M" ~ PROPDMG * 1e6,
+                PROPDMGEXP == ""  ~ PROPDMG,
+                PROPDMGEXP == "B" ~ PROPDMG * 1e9,
+                PROPDMGEXP == "m" ~ PROPDMG * 1e6,
+                PROPDMGEXP == "+" ~ PROPDMG,
+                PROPDMGEXP == "0" ~ PROPDMG,
+                PROPDMGEXP == "5" ~ PROPDMG * 1e5,
+                PROPDMGEXP == "6" ~ PROPDMG * 1e6,
+                PROPDMGEXP == "?" ~ PROPDMG,
+                PROPDMGEXP == "4" ~ PROPDMG * 1e4,
+                PROPDMGEXP == "2" ~ PROPDMG * 1e2,
+                PROPDMGEXP == "3" ~ PROPDMG * 1e3,
+                PROPDMGEXP == "h" ~ PROPDMG * 1e2,
+                PROPDMGEXP == "7" ~ PROPDMG * 1e7,
+                PROPDMGEXP == "H" ~ PROPDMG * 1e2,
+                PROPDMGEXP == "-" ~ PROPDMG,
+                PROPDMGEXP == "1" ~ PROPDMG * 10,
+                PROPDMGEXP == "8" ~ PROPDMG * 1e8
+        )) %>%
+        mutate(CROPDMGUSD = case_when(
+                CROPDMGEXP == ""  ~ CROPDMG,
+                CROPDMGEXP == "M" ~ CROPDMG * 1e6,
+                CROPDMGEXP == "K" ~ CROPDMG * 1e3,
+                CROPDMGEXP == "m" ~ CROPDMG * 1e6,
+                CROPDMGEXP == "B" ~ CROPDMG * 1e9,
+                CROPDMGEXP == "?" ~ CROPDMG,
+                CROPDMGEXP == "0" ~ CROPDMG,
+                CROPDMGEXP == "k" ~ CROPDMG * 1e3,
+                CROPDMGEXP == "2" ~ CROPDMG * 1e2
+        ))
+```
+
+### Summarizing Data
+
+Summarise `tidydata` with the totals of `FATALITIES`, `INJURIES`, `PROPDMGUSD`, `CROPDMGUSD` by `group`. Additional columns `HEALTH` and `TOTALDMG` combine total `FATALITIES` and `INJURIES`, and `PROPDMG` and `CROPDMG`.
+```{r}
+tidydata <- group_by(tidydata, group)
+sumdata <- tidydata %>% summarise(FATALITIES = sum(FATALITIES),
+                                  INJURIES = sum(INJURIES),
+                                  PROPDMG = sum(PROPDMGUSD),
+                                  CROPDMG = sum(CROPDMGUSD)) %>%
+        mutate(HEALTH = FATALITIES + INJURIES, TOTALDMG = PROPDMG + CROPDMG) %>%
+        arrange(desc(HEALTH))
+```
+
+## Results
+
+### Question 1
+Across the United States, which types of events are most harmful with respect to population health?
+```{r}
+fatalg <- ggplot(sumdata, aes(x = group, y = FATALITIES)) +
+        geom_bar(stat = 'identity', aes(fill = group)) +
+        coord_flip() +
+        xlab("Event Group") +
+        ylab("Total Fatalities") +
+        theme(legend.position = "none")
+injuryg <- ggplot(sumdata, aes(x = group, y = INJURIES)) +
+        geom_bar(stat = 'identity', aes(fill = group)) +
+        coord_flip() +
+        ylab("Total Injuries") +
+        theme(legend.position = "none", axis.title.y=element_blank())
+grid.arrange(fatalg, injuryg, ncol=2, nrow=1,
+     top = textGrob("Fatalities and Injuries from Weather Events Groups"))
+```
+
+From the plot, the event group "TORNADO" has the largest impact on public health, both in fatalities and injuries.
+
+```{r}
+knitr::kable(sumdata[1,c(1:3,6)], format = 'markdown')
+```
+
+### Question 2
+Across the United States, which types of events have the greatest economic consequences?
+```{r}
+propg <- ggplot(sumdata, aes(x = group, y = PROPDMG)) +
+        geom_bar(stat = 'identity', aes(fill = group)) +
+        coord_flip() +
+        xlab("Event Group") +
+        ylab("Property Damage ($)") +
+        theme(legend.position = "none")
+cropg <- ggplot(sumdata, aes(x = group, y = CROPDMG)) +
+        geom_bar(stat = 'identity', aes(fill = group)) +
+        coord_flip() +
+        ylab("Crop Damage ($)") +
+        theme(legend.position = "none", axis.title.y=element_blank())
+totalg <- ggplot(sumdata, aes(x = group, y = TOTALDMG)) +
+        geom_bar(stat = 'identity', aes(fill = group)) +
+        coord_flip() +
+        xlab("Event Group") +
+        ylab("Total Damage ($)") +
+        theme(legend.position = "none")
+grid.arrange(propg, cropg, totalg, ncol=2, nrow=2,
+     top = textGrob("Property and Crop Damages from Weather Events Groups"))
+```
+
+From the plot, the event group "FLOOD" has the largest impact on property damage and total damage, and "HEAT" has the largest impact on crop damage.
+
+```{r}
+knitr::kable(sumdata[c(4,2),c(1,4,5,7)], format = 'markdown')
+```
